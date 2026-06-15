@@ -2,7 +2,6 @@
 
 [![Python Version](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)]()
 
 > **A personal project** - An API testing client built specifically to solve the CSRF token injection pain point that Postman doesn't handle automatically.
 
