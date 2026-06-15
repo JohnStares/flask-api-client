@@ -1,0 +1,6 @@
+src/__pycache__
+venv/
+.gitignore
+cookies.json
+saved_requests.json
+.python-version
