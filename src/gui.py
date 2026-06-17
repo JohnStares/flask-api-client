@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, filedialog
-from tkinter.font import Font
 import json
 from threading import Thread
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -32,6 +31,16 @@ class SavedRequest:
     headers: str
     body: str
     timestamp: str
+    use_auth_header: bool = False
+    auth_token_type: str = "access"
+
+
+@dataclass
+class FormDataField:
+    """Represents a form data field"""
+    key: str
+    value: str
+    type: str  # 'text' or 'file'
 
 
 class APIRequestGUI:
@@ -52,10 +61,18 @@ class APIRequestGUI:
         self.current_endpoint = tk.StringVar()
         self.response_data: Optional[Response] = None
         
+        # Form data fields
+        self.form_fields: List[FormDataField] = []
+        self.form_field_widgets: List[Dict[str, Any]] = []
+        
         # Saved requests
         self.saved_requests: Dict[str, SavedRequest] = {}
         self.requests_file = Path("saved_requests.json")
         self.load_saved_requests()
+
+        # Add these after your other variables
+        self.use_auth_header = tk.BooleanVar(value=False)
+        self.auth_token_type = tk.StringVar(value="access")
         
         # Setup UI
         self.setup_styles()
@@ -66,7 +83,7 @@ class APIRequestGUI:
         self.setup_body_section()
         self.setup_response_section()
         self.setup_status_bar()
-        
+                
         # Initialize client
         self.init_client()
         
@@ -133,31 +150,47 @@ class APIRequestGUI:
         self.request_notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         
     def setup_url_bar(self):
-        """Setup URL and method selection"""
+        """Setup URL and method selection with auth controls"""
         url_frame = ttk.LabelFrame(self.top_frame, text="Request", padding="10")
         url_frame.pack(fill=tk.X, padx=5, pady=5)
         
-        # Base URL
+        # Row 0: Base URL and Method
         ttk.Label(url_frame, text="Base URL:").grid(row=0, column=0, sticky=tk.W, padx=5)
         base_url_entry = ttk.Entry(url_frame, textvariable=self.base_url, width=40)
         base_url_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=5)
         
-        # Method selection
         ttk.Label(url_frame, text="Method:").grid(row=0, column=2, sticky=tk.W, padx=(20,5))
         method_combo = ttk.Combobox(url_frame, textvariable=self.current_method, 
                                    values=[m.value for m in RequestMethod], 
                                    width=10, state="readonly")
         method_combo.grid(row=0, column=3, sticky=tk.W, padx=5)
         
-        # Endpoint
-        ttk.Label(url_frame, text="Endpoint:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        endpoint_entry = ttk.Entry(url_frame, textvariable=self.current_endpoint, width=80)
-        endpoint_entry.grid(row=1, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=5)
-        
         # Send button
         self.send_btn = ttk.Button(url_frame, text="🚀 SEND", command=self.send_request,
                                    style='Send.TButton', width=15)
         self.send_btn.grid(row=0, column=4, rowspan=2, padx=20, pady=5)
+        
+        # Row 1: Endpoint
+        ttk.Label(url_frame, text="Endpoint:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        endpoint_entry = ttk.Entry(url_frame, textvariable=self.current_endpoint, width=80)
+        endpoint_entry.grid(row=1, column=1, columnspan=3, sticky=(tk.W, tk.E), padx=5, pady=5)
+        
+        # Row 2: Authentication options
+        auth_frame = ttk.Frame(url_frame)
+        auth_frame.grid(row=2, column=0, columnspan=5, sticky=tk.W, pady=5, padx=5)
+        
+        # Auth header checkbox
+        auth_check = ttk.Checkbutton(auth_frame, text="Use Auth Header", 
+                                     variable=self.use_auth_header,
+                                     command=self.on_auth_toggle)
+        auth_check.pack(side=tk.LEFT, padx=5)
+        
+        # Token type selection (initially disabled)
+        ttk.Label(auth_frame, text="Token Type:").pack(side=tk.LEFT, padx=(20,5))
+        self.token_type_combo = ttk.Combobox(auth_frame, textvariable=self.auth_token_type,
+                                             values=["access", "refresh"],
+                                             width=10, state="disabled")
+        self.token_type_combo.pack(side=tk.LEFT, padx=5)
         
         # Configure grid weights
         url_frame.columnconfigure(1, weight=1)
@@ -182,7 +215,7 @@ class APIRequestGUI:
                   command=self.clear_headers).pack(side=tk.LEFT, padx=2)
         
     def setup_body_section(self):
-        """Setup request body section"""
+        """Setup request body section with support for form data"""
         body_frame = ttk.LabelFrame(self.request_notebook, text="Body", padding="10")
         self.request_notebook.add(body_frame, text="Body")
         
@@ -191,27 +224,185 @@ class APIRequestGUI:
         type_frame = ttk.Frame(body_frame)
         type_frame.pack(fill=tk.X, pady=(0,5))
         ttk.Radiobutton(type_frame, text="JSON", variable=self.body_type, 
-                       value="json").pack(side=tk.LEFT, padx=5)
+                       value="json", command=self.on_body_type_change).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(type_frame, text="Form Data", variable=self.body_type, 
-                       value="form").pack(side=tk.LEFT, padx=5)
+                       value="form", command=self.on_body_type_change).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(type_frame, text="Raw", variable=self.body_type, 
-                       value="raw").pack(side=tk.LEFT, padx=5)
+                       value="raw", command=self.on_body_type_change).pack(side=tk.LEFT, padx=5)
         ttk.Radiobutton(type_frame, text="None", variable=self.body_type, 
-                       value="none").pack(side=tk.LEFT, padx=5)
+                       value="none", command=self.on_body_type_change).pack(side=tk.LEFT, padx=5)
         
-        # Body text area
-        self.body_text = scrolledtext.ScrolledText(body_frame, height=12, 
+        # Container for body content (will be swapped based on type)
+        self.body_container = ttk.Frame(body_frame)
+        self.body_container.pack(fill=tk.BOTH, expand=True)
+        
+        # JSON/Raw text area (default)
+        self.body_text = scrolledtext.ScrolledText(self.body_container, height=12, 
                                                     font=('Consolas', 10))
         self.body_text.pack(fill=tk.BOTH, expand=True)
         self.body_text.insert(1.0, '{\n  \n}')
         
-        # Buttons
+        # Form data container (hidden by default)
+        self.form_container = ttk.Frame(self.body_container)
+        
+        # Form data header
+        form_header = ttk.Frame(self.form_container)
+        form_header.pack(fill=tk.X, pady=(0,5))
+        ttk.Label(form_header, text="Key", font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT, padx=5)
+        ttk.Label(form_header, text="Value/File Path", font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT, padx=5, expand=True, fill=tk.X)
+        ttk.Label(form_header, text="Type", font=('Helvetica', 10, 'bold')).pack(side=tk.LEFT, padx=5)
+        
+        # Scrollable frame for form fields
+        self.form_canvas = tk.Canvas(self.form_container, height=200)
+        self.form_scrollbar = ttk.Scrollbar(self.form_container, orient="vertical", command=self.form_canvas.yview)
+        self.form_fields_frame = ttk.Frame(self.form_canvas)
+        
+        self.form_fields_frame.bind(
+            "<Configure>",
+            lambda e: self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all"))
+        )
+        
+        self.form_canvas.create_window((0, 0), window=self.form_fields_frame, anchor="nw")
+        self.form_canvas.configure(yscrollcommand=self.form_scrollbar.set)
+        
+        # Pack form widgets (hidden initially)
+        self.form_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.form_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Buttons for form data
+        form_btn_frame = ttk.Frame(self.form_container)
+        form_btn_frame.pack(fill=tk.X, pady=(5,0))
+        ttk.Button(form_btn_frame, text="➕ Add Field", command=self.add_form_field).pack(side=tk.LEFT, padx=2)
+        ttk.Button(form_btn_frame, text="🗑️ Remove Last", command=self.remove_last_form_field).pack(side=tk.LEFT, padx=2)
+        ttk.Button(form_btn_frame, text="📋 Clear All", command=self.clear_form_fields).pack(side=tk.LEFT, padx=2)
+        
+        # Add initial form field
+        self.add_form_field()
+        
+        # Buttons for JSON/Raw
         btn_frame = ttk.Frame(body_frame)
         btn_frame.pack(fill=tk.X, pady=(5,0))
         ttk.Button(btn_frame, text="Format JSON", 
                   command=lambda: self.format_json(self.body_text)).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="Clear", 
                   command=self.clear_body).pack(side=tk.LEFT, padx=2)
+
+    def on_auth_toggle(self):
+        """Handle auth header toggle"""
+        if self.use_auth_header.get():
+            self.token_type_combo.config(state="readonly")
+        else:
+            self.token_type_combo.config(state="disabled")
+        
+    def on_body_type_change(self):
+        """Handle body type change"""
+        body_type = self.body_type.get()
+        
+        if body_type == "form":
+            # Show form container, hide text
+            self.body_text.pack_forget()
+            self.form_container.pack(fill=tk.BOTH, expand=True)
+        else:
+            # Show text, hide form container
+            self.form_container.pack_forget()
+            self.body_text.pack(fill=tk.BOTH, expand=True)
+            
+            # Update placeholder text
+            if body_type == "json" and not self.body_text.get(1.0, tk.END).strip():
+                self.body_text.delete(1.0, tk.END)
+                self.body_text.insert(1.0, '{\n  \n}')
+    
+    def add_form_field(self, key: str = "", value: str = "", field_type: str = "text"):
+        """Add a new form field row"""
+        row = len(self.form_field_widgets)
+        
+        # Frame for this row
+        row_frame = ttk.Frame(self.form_fields_frame)
+        row_frame.pack(fill=tk.X, pady=2)
+        
+        # Key entry
+        key_entry = ttk.Entry(row_frame, width=20)
+        key_entry.insert(0, key)
+        key_entry.pack(side=tk.LEFT, padx=2)
+        
+        # Value frame (contains entry or file path)
+        value_frame = ttk.Frame(row_frame)
+        value_frame.pack(side=tk.LEFT, padx=2, expand=True, fill=tk.X)
+        
+        value_entry = ttk.Entry(value_frame)
+        value_entry.insert(0, value)
+        value_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # Type selection
+        type_combo = ttk.Combobox(row_frame, values=["text", "file"], width=10, state="readonly")
+        type_combo.set(field_type)
+        type_combo.pack(side=tk.LEFT, padx=2)
+        
+        # Browse button (for files)
+        browse_btn = ttk.Button(row_frame, text="📁 Browse", width=8)
+        browse_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Remove button
+        remove_btn = ttk.Button(row_frame, text="✕", width=3)
+        remove_btn.pack(side=tk.LEFT, padx=2)
+        
+        # Store widgets for this field
+        field_widgets = {
+            'frame': row_frame,
+            'key': key_entry,
+            'value': value_entry,
+            'type': type_combo,
+            'browse': browse_btn,
+            'remove': remove_btn
+        }
+        self.form_field_widgets.append(field_widgets)
+        
+        # Configure browse button
+        def browse_file(v_entry=value_entry, t_combo=type_combo):
+            if t_combo.get() == "file":
+                file_path = filedialog.askopenfilename()
+                if file_path:
+                    v_entry.delete(0, tk.END)
+                    v_entry.insert(0, file_path)
+        
+        browse_btn.config(command=browse_file)
+        
+        # Configure remove button
+        def remove_field(row_frame=row_frame, widgets=field_widgets):
+            row_frame.destroy()
+            if widgets in self.form_field_widgets:
+                self.form_field_widgets.remove(widgets)
+        
+        remove_btn.config(command=remove_field)
+        
+        # Update type change behavior
+        def on_type_change(event=None, v_entry=value_entry, t_combo=type_combo):
+            if t_combo.get() == "file":
+                v_entry.delete(0, tk.END)
+                v_entry.insert(0, "Click Browse to select file")
+            else:
+                v_entry.delete(0, tk.END)
+        
+        type_combo.bind('<<ComboboxSelected>>', on_type_change)
+        
+        # Update scroll region
+        self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all"))
+    
+    def remove_last_form_field(self):
+        """Remove the last form field"""
+        if self.form_field_widgets:
+            last_widget = self.form_field_widgets.pop()
+            last_widget['frame'].destroy()
+            self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all"))
+    
+    def clear_form_fields(self):
+        """Clear all form fields"""
+        for widget in self.form_field_widgets:
+            widget['frame'].destroy()
+        self.form_field_widgets.clear()
+        self.form_canvas.configure(scrollregion=self.form_canvas.bbox("all"))
+        # Add one empty field
+        self.add_form_field()
         
     def setup_response_section(self):
         """Setup response display section"""
@@ -297,24 +488,59 @@ class APIRequestGUI:
             
             # Parse body based on type
             kwargs = {'headers': headers} if headers else {}
+            body_type = self.body_type.get()
             
-            if self.body_type.get() != "none":
+            if body_type == "form":
+                # Insert the right headers
+                headers.update({"Content-Type": "multipart/form-data"})
+
+                # Build form data
+                files = []
+                data = {}
+                
+                for field in self.form_field_widgets:
+                    key = field['key'].get().strip()
+                    value = field['value'].get().strip()
+                    field_type = field['type'].get()
+                    
+                    if key and value:
+                        if field_type == "file":
+                            # Handle file upload
+                            file_path = Path(value)
+                            if file_path.exists():
+                                files.append((key, (file_path.name, open(file_path, 'rb'), 'application/octet-stream')))
+                            else:
+                                self.root.after(0, lambda: messagebox.showerror("Error", f"File not found: {value}"))
+                                self.root.after(0, self._enable_send_button)
+                                return
+                        else:
+                            data[key] = value
+                
+                if data:
+                    kwargs["files"] = files
+                    kwargs["data"] = data
+                    
+            elif body_type != "none":
                 body_text = self.body_text.get(1.0, tk.END).strip()
                 if body_text:
-                    if self.body_type.get() == "json":
+                    if body_type == "json":
                         try:
                             kwargs['json'] = json.loads(body_text)
                         except json.JSONDecodeError as e:
                             self.root.after(0, lambda: messagebox.showerror("Error", f"Invalid JSON body: {e}"))
                             self.root.after(0, self._enable_send_button)
                             return
-                    elif self.body_type.get() == "form":
-                        kwargs['data'] = body_text
                     else:  # raw
                         kwargs['data'] = body_text
             
-            # Make request
+           # Make request
             start_time = datetime.now()
+
+            # Add auth header parameters if enabled
+            if self.use_auth_header.get():
+                kwargs["AUTH_HEADER"] = True
+                kwargs["token_type"] = self.auth_token_type.get()
+    
             response = getattr(self.client, method.lower())(endpoint, **kwargs)
             elapsed = (datetime.now() - start_time).total_seconds()
             
@@ -379,16 +605,34 @@ class APIRequestGUI:
         """Save current request to file"""
         name = tk.simpledialog.askstring("Save Request", "Enter request name:")
         if name:
+            # Save form data as JSON if in form mode
+            if self.body_type.get() == "form":
+                form_data = {}
+                for field in self.form_field_widgets:
+                    key = field['key'].get()
+                    value = field['value'].get()
+                    field_type = field['type'].get()
+                    if key and value:
+                        form_data[key] = {"value": value, "type": field_type}
+                body_content = json.dumps(form_data, indent=2)
+            else:
+                body_content = self.body_text.get(1.0, tk.END).strip()
+            
             saved = SavedRequest(
                 name=name,
                 method=self.current_method.get(),
                 endpoint=self.current_endpoint.get(),
                 headers=self.headers_text.get(1.0, tk.END).strip(),
-                body=self.body_text.get(1.0, tk.END).strip(),
+                body=body_content,
                 timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
             self.saved_requests[name] = saved
             self.save_saved_requests()
+
+            # Save auth settings separately
+            saved.use_auth_header = self.use_auth_header.get()
+            saved.auth_token_type = self.auth_token_type.get()
+
             messagebox.showinfo("Success", f"Request '{name}' saved!")
             
     def load_request_dialog(self):
@@ -425,8 +669,35 @@ class APIRequestGUI:
                 self.current_endpoint.set(req.endpoint)
                 self.headers_text.delete(1.0, tk.END)
                 self.headers_text.insert(1.0, req.headers)
-                self.body_text.delete(1.0, tk.END)
-                self.body_text.insert(1.0, req.body)
+
+                # Load auth settings
+                self.use_auth_header.set(getattr(req, 'use_auth_header', False))
+                self.auth_token_type.set(getattr(req, 'auth_token_type', 'access'))
+                self.on_auth_toggle()  # Update UI state
+                    
+                # Check if body is form data
+                try:
+                    form_data = json.loads(req.body)
+                    if isinstance(form_data, dict) and all(isinstance(v, dict) and 'type' in v for v in form_data.values()):
+                        # Load as form data
+                        self.body_type.set("form")
+                        self.on_body_type_change()
+                        self.clear_form_fields()
+                        for key, value in form_data.items():
+                            self.add_form_field(key, value['value'], value['type'])
+                    else:
+                        # Load as JSON/raw
+                        self.body_type.set("json")
+                        self.on_body_type_change()
+                        self.body_text.delete(1.0, tk.END)
+                        self.body_text.insert(1.0, req.body)
+                except:
+                    # Load as JSON/raw
+                    self.body_type.set("json")
+                    self.on_body_type_change()
+                    self.body_text.delete(1.0, tk.END)
+                    self.body_text.insert(1.0, req.body)
+                
                 dialog.destroy()
                 messagebox.showinfo("Loaded", f"Loaded request '{name}'")
                 
@@ -472,6 +743,7 @@ Features:
 ✅ Request history
 ✅ JSON formatting
 ✅ Multi-tab interface
+✅ Form data with file uploads
 
 Built with Python & tkinter
 """
@@ -500,8 +772,11 @@ Built with Python & tkinter
         
     def clear_body(self):
         """Clear body text"""
-        self.body_text.delete(1.0, tk.END)
-        self.body_text.insert(1.0, '{\n  \n}')
+        if self.body_type.get() == "form":
+            self.clear_form_fields()
+        else:
+            self.body_text.delete(1.0, tk.END)
+            self.body_text.insert(1.0, '{\n  \n}')
         
     def clear_cookies(self):
         """Clear all cookies"""
