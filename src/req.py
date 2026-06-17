@@ -234,27 +234,32 @@ class SessionClient(HttpClient):
 		except HTTPError as he:
 			return {
 				"status_code": response.status_code, # pyright: ignore
-				"error": str(he)
+				"error": str(he),
+				"details": response.json()
 			}
 		except Timeout as t:
 			return {
 				"status_code": response.status_code, # pyright: ignore
-				"error": str(t)
+				"error": str(t),
+				"details": response.json()
 			}
 		except ConnectionError as ce:
 			return {
 				"status_code": response.status_code, # pyright: ignore
-				"error": str(ce)
+				"error": str(ce),
+				"details": response.json()
 			}
 		except TooManyRedirects as tmr:
 			return {
 				"status_code": response.status_code, # pyright: ignore
-				"error": str(tmr)
+				"error": str(tmr),
+				"details": response.json()
 			}
 		except RequestException as re:
 			return {
 				"status_code": response.status_code, # pyright: ignore
-				"error": str(re)
+				"error": str(re),
+				"details": response.json()
 			}
 		except Exception as e:
 			return {
