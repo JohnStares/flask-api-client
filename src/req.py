@@ -207,7 +207,7 @@ class SessionClient(HttpClient):
 		url = self.url_builder.build_url(endpoint)
 
 		csrf_token_type: str = kwargs.pop("csrf_cookie_type", None) or "csrf_access"
-		auth_header = kwargs.pop("auth_header", None)
+		auth_header = kwargs.pop("AUTH_HEADER", None)
 
 		if auth_header:
 			token_type = kwargs.pop("token_type", None) or "access"
